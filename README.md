@@ -28,10 +28,15 @@ compositors do; GNOME/Mutter historically doesn't.
 ## One-time system setup
 
 ```sh
-sudo pacman -S --needed wl-clipboard ydotool wtype
+sudo pacman -S --needed wl-clipboard ydotool wtype nodejs npm webkit2gtk-4.1 gtk3
+go install github.com/wailsapp/wails/v2/cmd/wails@latest   # needs ~/.local/bin (or $(go env GOBIN)) on PATH
 sudo usermod -aG input "$USER"
 systemctl --user enable --now ydotool.service   # or ydotoold, see below
 ```
+
+Node.js/npm, `wails`, and webkit2gtk/gtk3 are only needed to build the
+template editor GUI (`cmd/copy-paste-helper-editor`) — the daemon itself
+doesn't link against any of that.
 
 Then **log out and back in** (or `newgrp input`) for the group change to
 take effect.
@@ -54,30 +59,47 @@ then `sudo udevadm control --reload && sudo udevadm trigger`.
 
 ```sh
 go build -o copy-paste-helper ./cmd/copy-paste-helper
+
+cd cmd/copy-paste-helper-editor
+wails build -tags webkit2_41    # needed if your system only has webkit2gtk-4.1, not 4.0
+cd ../..
+cp cmd/copy-paste-helper-editor/build/bin/copy-paste-helper-editor .
+```
+
+```sh
 ./copy-paste-helper                 # uses ./templates by default
 ./copy-paste-helper -templates /path/to/templates
 ```
 
-The program must be able to open `/dev/input/eventX` and `/dev/uinput`, so
+The daemon must be able to open `/dev/input/eventX` and `/dev/uinput`, so
 run it as your normal user once the group setup above is done (no root
 needed). Run it from the repo root (or pass `-templates`) so it finds the
 `templates/` directory.
 
+The daemon looks for `copy-paste-helper-editor` right next to its own
+executable (falling back to `PATH`) when you use the tray's "Edit
+Templates..." item — that's why the `cp` step above puts both binaries in
+the same directory.
+
 ## Code layout
 
 ```
-cmd/copy-paste-helper/  the binary: flag parsing and wiring the pieces below together
-internal/template/      loads/validates the YAML template schema (Button, Template)
-internal/keyboard/      evdev device grab + uinput passthrough, emits KeyEvents
-internal/engine/        the state machine: active template, scratch buffers, paste mode
-internal/desktop/       clipboard, synthetic keystrokes, notifications (shells out to CLI tools)
-internal/tray/          the right-click tray icon and menu
-templates/              example YAML templates
+cmd/copy-paste-helper/         the daemon: flag parsing and wiring the pieces below together
+cmd/copy-paste-helper-editor/  the Wails + Svelte GUI template editor (a separate binary)
+internal/template/             loads/validates/saves/watches the YAML template schema (Button, Template)
+internal/keyboard/             evdev device grab + uinput passthrough, emits KeyEvents
+internal/engine/               the state machine: active template, scratch buffers, paste mode
+internal/desktop/              clipboard, synthetic keystrokes, notifications (shells out to CLI tools)
+internal/tray/                 the right-click tray icon and menu
+templates/                     example YAML templates
 ```
 
 Dependencies point one way: `engine` depends on `template`, `keyboard`, and
 `desktop` (which don't know about each other or about `engine`), `tray`
 depends on `engine`, and `cmd/copy-paste-helper` wires all of them together.
+`cmd/copy-paste-helper-editor` depends only on `internal/template` (the same
+schema/validation code the daemon uses) — it has no idea the daemon, the
+keyboard, or the tray exist.
 
 ## Templates
 
@@ -134,6 +156,41 @@ button keys, duplicate ids, `{{id}}` references to an id that doesn't
 exist, and circular `{{id}}` references. The program refuses to start until
 templates are valid.
 
+## Editing templates with the GUI
+
+Rather than hand-editing YAML, right-click the tray icon and choose **Edit
+Templates...** to open `copy-paste-helper-editor` — a small Wails
+([wails.io](https://wails.io)) app with a Svelte 5 frontend. It lists every
+template in a sidebar; picking one shows its buttons in a form (key,
+optional `id`, template text, tool-tip, mode), with:
+
+- **Live validation** as you type (debounced ~350ms), showing the same
+  problems `ValidateTemplate` would — you can't save until they're fixed.
+- **Live `{{id}}` preview** under any button whose template text references
+  another button, so you can see the resolved result without saving.
+- **+ New Template** / **+ Add button** / a ✕ to remove a button or delete
+  a whole template (with confirmation).
+
+The editor is a separate process from the daemon and only ever touches
+files in the templates directory — it has no idea a daemon is even running.
+That's what hot reload (below) is for.
+
+### Hot reload
+
+The running daemon watches the templates directory and reloads whenever a
+file changes — saving in the editor (or hand-editing a YAML file, or `git
+pull`-ing new templates) takes effect immediately, no restart needed:
+
+- A successful reload re-validates everything, fires a "Templates Reloaded"
+  notification, and rebuilds the tray's Template submenu to match.
+- Your active template stays selected (matched by file path) with its
+  scratch buffers intact, unless that exact file was deleted/renamed, in
+  which case selection falls back to the first template.
+- If the new state of the directory fails validation, the daemon logs the
+  problem, shows a "Templates: Reload Failed" notification, and keeps
+  running on the last good set of templates — a bad edit never crashes it
+  or leaves it stuck mid-reload.
+
 ## Keys
 
 | Key                       | Action                                                                 |
@@ -160,6 +217,7 @@ A right-click tray icon (via the StatusNotifierItem D-Bus protocol — no GTK
 dependency, works with KDE, and most other freedesktop-compliant desktops)
 mirrors and controls the same state as the hotkeys:
 
+- **Edit Templates...** — launches the template editor GUI (see above).
 - **Template** — submenu listing every loaded template; click one to switch
   to it directly (same effect as Numpad +/-, but not limited to stepping
   one at a time).

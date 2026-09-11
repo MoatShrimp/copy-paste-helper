@@ -48,6 +48,30 @@ func (s *State) resetScratch() {
 	s.scratch = map[string]string{}
 }
 
+// ReplaceTemplates swaps in a freshly loaded and validated template list —
+// used when the templates directory changes on disk (e.g. the editor GUI
+// saved a change) and should take effect without restarting. The
+// currently active template stays selected, with its scratch buffers
+// intact, if a template at the same Path still exists in the new list;
+// otherwise selection falls back to the first template with scratch reset.
+// A nil or empty list is ignored, since it usually means every template
+// file is mid-write rather than genuinely all gone.
+func (s *State) ReplaceTemplates(templates []*template.Template) {
+	if len(templates) == 0 {
+		return
+	}
+	currentPath := s.Current().Path
+	s.templates = templates
+	for i, t := range templates {
+		if t.Path == currentPath {
+			s.tplIndex = i
+			return
+		}
+	}
+	s.tplIndex = 0
+	s.resetScratch()
+}
+
 func (s *State) SwitchTemplate(delta int) {
 	next := s.tplIndex + delta
 	if next < 0 || next >= len(s.templates) {

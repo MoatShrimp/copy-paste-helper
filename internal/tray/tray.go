@@ -1,7 +1,7 @@
-// Package tray is the right-click system tray icon: a Template submenu, a
-// Mode submenu, a Suspended toggle, and Quit, backed by the
-// StatusNotifierItem D-Bus protocol (github.com/gogpu/systray) rather than
-// GTK, so it needs no cgo.
+// Package tray is the right-click system tray icon: an Edit Templates
+// launcher, a Template submenu, a Mode submenu, a Suspended toggle, and
+// Quit, backed by the StatusNotifierItem D-Bus protocol
+// (github.com/gogpu/systray) rather than GTK, so it needs no cgo.
 package tray
 
 import (
@@ -25,12 +25,36 @@ type Tray struct {
 }
 
 // New builds the tray icon and menu. commands is where click handlers post
-// state-mutating closures for the caller to run; quit is called for the
-// Quit menu item.
-func New(state *engine.State, suspended *atomic.Bool, commands chan func(), quit func()) *Tray {
+// state-mutating closures for the caller to run; editTemplates launches the
+// template editor; quit is called for the Quit menu item.
+func New(state *engine.State, suspended *atomic.Bool, commands chan func(), editTemplates func(), quit func()) *Tray {
 	tr := &Tray{}
+	menu := tr.buildMenu(state, suspended, commands, editTemplates, quit)
+	tr.st = systray.New().
+		SetIcon(iconActivePNG).
+		SetTooltip("copy-paste-helper — " + state.Current().Name).
+		SetMenu(menu).
+		Show()
+	return tr
+}
+
+// Rebuild replaces the menu entirely — needed when the set of templates
+// itself changes (one is added or removed), since individual menu items
+// can be relabeled/rechecked in place but not inserted or removed once
+// built. Simple state changes (active template, mode, suspended) should
+// use Sync instead; Rebuild already leaves everything in sync.
+func (tr *Tray) Rebuild(state *engine.State, suspended *atomic.Bool, commands chan func(), editTemplates func(), quit func()) {
+	menu := tr.buildMenu(state, suspended, commands, editTemplates, quit)
+	tr.st.SetMenu(menu)
+}
+
+func (tr *Tray) buildMenu(state *engine.State, suspended *atomic.Bool, commands chan func(), editTemplates func(), quit func()) *systray.Menu {
+	tr.templateItems = nil
 
 	menu := systray.NewMenu()
+
+	menu.Add("Edit Templates...", func() { editTemplates() })
+	menu.AddSeparator()
 
 	templateMenu := systray.NewMenu()
 	for i, t := range state.Templates() {
@@ -59,13 +83,7 @@ func New(state *engine.State, suspended *atomic.Bool, commands chan func(), quit
 	menu.AddSeparator()
 	menu.Add("Quit", func() { quit() })
 
-	tr.st = systray.New().
-		SetIcon(iconActivePNG).
-		SetTooltip("copy-paste-helper — " + state.Current().Name).
-		SetMenu(menu).
-		Show()
-
-	return tr
+	return menu
 }
 
 // Run pumps the tray's event loop; it blocks until Remove is called.
