@@ -1,0 +1,39 @@
+# Example template. Templates are loaded alphabetically by filename, and
+# Numpad +/- cycles through them in that order.
+#
+# Each entry in `buttons` binds one physical key. Valid keys are f1..f12
+# and n1..n9 (n1..n9 are the numpad digit keys, independent of Num Lock).
+#
+# Fields per button:
+#   button:   required — which physical key this binds
+#   template: optional — text to paste/type; if omitted, the button becomes
+#             a scratch buffer (first press copies your selection, later
+#             presses paste it back)
+#   tool-tip: optional — label shown by the Numpad Ins info popup
+#   id:       optional — name other buttons' `template` text can reference
+#             as {{id}} in this same template
+#   mode:     optional — "paste" or "write", overrides the global mode
+#             (Numpad * / Numpad /) just for this button
+#
+# A key not listed here does nothing while this template is active.
+name: Example template
+buttons:
+  - button: f1
+    id: email
+    template: "you@example.com"
+    tool-tip: "F1: work email"
+
+  - button: n1
+    id: signature
+    template: |
+      Best regards,
+      Mathias
+    tool-tip: "N1: signature"
+
+  - button: f2
+    template: "Reach me at {{email}}.\n\n{{signature}}"
+    tool-tip: "F2: contact line (built from F1 and N1)"
+    mode: paste # always goes through the clipboard, regardless of the global mode
+
+  - button: n2
+    tool-tip: "N2: scratch buffer"

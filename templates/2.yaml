@@ -1,0 +1,26 @@
+# Every button is listed but none define `template`, so every key acts as
+# a scratch buffer: press once to copy the current selection, press again
+# to paste it. Buttons don't need `id` or `tool-tip` — both stay optional.
+name: Scratch pad
+buttons:
+  - button: f1
+  - button: f2
+  - button: f3
+  - button: f4
+  - button: f5
+  - button: f6
+  - button: f7
+  - button: f8
+  - button: f9
+  - button: f10
+  - button: f11
+  - button: f12
+  - button: n1
+  - button: n2
+  - button: n3
+  - button: n4
+  - button: n5
+  - button: n6
+  - button: n7
+  - button: n8
+  - button: n9

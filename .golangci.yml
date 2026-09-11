@@ -1,0 +1,56 @@
+version: "2"
+
+linters:
+  default: standard
+
+  enable:
+    # HTTP / context correctness
+    - bodyclose
+    - contextcheck
+    - noctx
+    - containedctx
+
+    # Error handling
+    - errorlint
+    - nilerr
+    - errname
+
+    # Bug / correctness checks
+    - gocritic
+    - exhaustive
+    - exhaustruct_v5
+    - makezero
+    - gocheckcompilerdirectives
+
+    # Code quality
+    - unconvert
+    - misspell
+    - revive
+
+    # Security
+    - gosec
+
+    # Testing
+    - thelper
+    - usetesting
+
+    # Keep nolint directives clean
+    - nolintlint
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    exhaustruct_v5:
+      explicit-mode: true
+
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
