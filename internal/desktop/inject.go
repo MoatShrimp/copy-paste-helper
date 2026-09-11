@@ -1,26 +1,32 @@
 package desktop
 
 import (
-	"fmt"
-	"os/exec"
+	"errors"
+	"sync"
 )
 
-// Linux input-event-codes.h keycodes used for synthetic key injection.
-const (
-	keyLeftCtrl = 29
-	keyC        = 46
-	keyV        = 47
+var (
+	keySenderMu sync.RWMutex
+	keySender   func(...int) error
 )
+
+// SetKeySender installs the virtual-keyboard function used for shortcuts.
+// The main package supplies the active platform keyboard listener; passing nil
+// disables shortcut injection.
+func SetKeySender(sender func(...int) error) {
+	keySenderMu.Lock()
+	keySender = sender
+	keySenderMu.Unlock()
+}
 
 func sendKeyCombo(codes ...int) error {
-	args := make([]string, 0, len(codes)*2)
-	for _, c := range codes {
-		args = append(args, fmt.Sprintf("%d:1", c))
+	keySenderMu.RLock()
+	sender := keySender
+	keySenderMu.RUnlock()
+	if sender == nil {
+		return errors.New("virtual keyboard is not initialized")
 	}
-	for i := len(codes) - 1; i >= 0; i-- {
-		args = append(args, fmt.Sprintf("%d:0", codes[i]))
-	}
-	return exec.Command("ydotool", append([]string{"key"}, args...)...).Run()
+	return sender(codes...)
 }
 
 func SendCtrlC() error {
@@ -29,17 +35,4 @@ func SendCtrlC() error {
 
 func SendCtrlV() error {
 	return sendKeyCombo(keyLeftCtrl, keyV)
-}
-
-// TypeText types text out as literal keystrokes, without touching the
-// clipboard. This uses wtype rather than `ydotool type`: ydotool simulates
-// fixed US-layout keycodes, which come out wrong on any other active
-// keyboard layout (e.g. a Swedish layout renders some punctuation as
-// letters with diacritics); wtype instead builds a keymap for the exact
-// characters being typed, so it's correct regardless of layout.
-func TypeText(text string) error {
-	if text == "" {
-		return nil
-	}
-	return exec.Command("wtype", "--", text).Run()
 }

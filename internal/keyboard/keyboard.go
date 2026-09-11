@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package keyboard grabs a keyboard device exclusively via evdev, re-emits
 // every key that isn't one of copy-paste-helper's hotkeys through a virtual
 // uinput device (so the keyboard keeps working normally), and delivers
@@ -10,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -157,6 +160,7 @@ func FindDevices() ([]string, error) {
 type Listener struct {
 	src       *os.File
 	uinput    *os.File
+	uinputMu  sync.Mutex
 	Events    chan KeyEvent
 	suspended *atomic.Bool
 }
@@ -201,6 +205,38 @@ func (kl *Listener) Close() {
 	kl.uinput.Close()
 }
 
+// SendKeyCombo emits a chord through the listener's virtual keyboard. All keys
+// are pressed in order and released in reverse order, matching the convention
+// used for modifier shortcuts such as Ctrl+C and Ctrl+V.
+func (kl *Listener) SendKeyCombo(codes ...int) error {
+	kl.uinputMu.Lock()
+	defer kl.uinputMu.Unlock()
+
+	for _, code := range codes {
+		if err := kl.writeInputEvent(evKey, code, 1); err != nil {
+			return err
+		}
+	}
+	if err := kl.writeInputEvent(evSyn, synReport, 0); err != nil {
+		return err
+	}
+	for i := len(codes) - 1; i >= 0; i-- {
+		if err := kl.writeInputEvent(evKey, codes[i], 0); err != nil {
+			return err
+		}
+	}
+	return kl.writeInputEvent(evSyn, synReport, 0)
+}
+
+func (kl *Listener) writeInputEvent(eventType, code int, value int32) error {
+	buf := make([]byte, inputEventSize)
+	binary.LittleEndian.PutUint16(buf[16:18], uint16(eventType))
+	binary.LittleEndian.PutUint16(buf[18:20], uint16(code))
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(value))
+	_, err := kl.uinput.Write(buf)
+	return err
+}
+
 func (kl *Listener) readLoop() {
 	buf := make([]byte, inputEventSize)
 	ctrl := false
@@ -230,7 +266,10 @@ func (kl *Listener) readLoop() {
 			continue // swallow: don't forward hotkeys to the passthrough device
 		}
 
-		if _, err := kl.uinput.Write(buf); err != nil {
+		kl.uinputMu.Lock()
+		_, err = kl.uinput.Write(buf)
+		kl.uinputMu.Unlock()
+		if err != nil {
 			close(kl.Events)
 			return
 		}

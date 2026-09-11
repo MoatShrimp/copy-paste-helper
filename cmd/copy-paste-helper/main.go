@@ -1,3 +1,5 @@
+//go:build linux || windows
+
 // Command copy-paste-helper turns F1-F12 and the numpad into copy/paste
 // buttons, configured via YAML templates, with a right-click tray icon.
 // See the package doc comments under internal/ for how the pieces fit
@@ -14,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +49,9 @@ func main() {
 	if err := template.ValidateTemplates(templates); err != nil {
 		log.Fatalf("template validation failed:\n%v", err)
 	}
+	if err := desktop.InitClipboard(); err != nil {
+		log.Fatalf("initializing clipboard: %v", err)
+	}
 
 	devices, err := keyboard.FindDevices()
 	if err != nil {
@@ -70,8 +76,10 @@ func main() {
 		}(kl)
 	}
 	if len(listeners) == 0 {
-		log.Fatalf("could not grab any keyboard device (are you in the 'input' group and can you access /dev/uinput?)")
+		log.Fatalf("could not initialize keyboard capture")
 	}
+	desktop.SetKeySender(listeners[0].SendKeyCombo)
+	defer desktop.SetKeySender(nil)
 
 	state := engine.NewState(templates)
 
@@ -90,8 +98,19 @@ func main() {
 	editTemplates := func() { launchEditor(templatesDir) }
 	tr := tray.New(state, &suspended, commands, editTemplates, quit)
 	defer tr.Remove()
+	trayReady := make(chan *tray.Tray)
+	trayDone := make(chan error, 1)
 	go func() {
-		if err := tr.Run(); err != nil {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		tr := tray.New(state, &suspended, commands, quit)
+		trayReady <- tr
+		trayDone <- tr.Run()
+	}()
+	tr := <-trayReady
+	defer func() {
+		tr.Remove()
+		if err := <-trayDone; err != nil {
 			log.Printf("tray: %v", err)
 		}
 	}()

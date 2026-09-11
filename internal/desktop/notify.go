@@ -2,9 +2,24 @@ package desktop
 
 import (
 	"html"
-	"os/exec"
+	"runtime"
 	"strings"
+	"sync"
 )
+
+var (
+	notifierMu sync.RWMutex
+	notifier   func(title, body string)
+)
+
+// SetNotifier installs the application's desktop-notification backend. Passing
+// nil disables notifications. The tray package supplies the production
+// implementation once its D-Bus connection has been created.
+func SetNotifier(fn func(title, body string)) {
+	notifierMu.Lock()
+	notifier = fn
+	notifierMu.Unlock()
+}
 
 // notificationsMuted is set while a command from the tray menu is being
 // applied: the menu (its checkmarks, its icon) already shows the result, so
@@ -18,11 +33,6 @@ func SetNotificationsMuted(muted bool) {
 	notificationsMuted = muted
 }
 
-// appIcon is a Standard Icon Naming Specification name, so it resolves from
-// the desktop's own icon theme (no bundled file needed) on GNOME, KDE, XFCE,
-// and friends alike.
-const appIcon = "edit-paste"
-
 // Notify shows a desktop notification. body may use the small Pango markup
 // subset notification daemons generally support (<b>, <i>, <u>) — use
 // EscapeMarkup on any interpolated value that isn't already known to be
@@ -32,7 +42,24 @@ func Notify(title, body string) {
 	if notificationsMuted {
 		return
 	}
-	_ = exec.Command("notify-send", "-a", "copy-paste-helper", "-i", appIcon, title, body).Run()
+	notifierMu.RLock()
+	fn := notifier
+	notifierMu.RUnlock()
+	if fn != nil {
+		fn(title, notificationBody(body))
+	}
+}
+
+func notificationBody(body string) string {
+	if runtime.GOOS != "windows" {
+		return body
+	}
+	withoutMarkup := strings.NewReplacer(
+		"<b>", "", "</b>", "",
+		"<i>", "", "</i>", "",
+		"<u>", "", "</u>", "",
+	).Replace(body)
+	return html.UnescapeString(withoutMarkup)
 }
 
 func NotifyLines(title string, lines []string) {

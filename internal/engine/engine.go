@@ -6,6 +6,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -223,35 +224,75 @@ func (s *State) emit(text string, modeOverride string) {
 	}
 }
 
-// pasteViaClipboard swaps the clipboard to text, sends Ctrl+V, then restores
-// whatever was on the clipboard before.
+const clipboardTimeout = 2 * time.Second
+
+// pasteViaClipboard snapshots every clipboard format, temporarily publishes
+// text, sends Ctrl+V, then restores the snapshot after the target has had time
+// to consume the paste request.
 func pasteViaClipboard(text string) {
-	old := desktop.GetClipboard()
-	_ = desktop.SetClipboard(text)
-	_ = desktop.SendCtrlV()
-	time.Sleep(150 * time.Millisecond)
-	_ = desktop.SetClipboard(old)
+	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+	old, err := desktop.SnapshotClipboard(ctx)
+	cancel()
+	if err != nil {
+		return
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), clipboardTimeout)
+	err = desktop.WriteClipboardText(ctx, text)
+	if err == nil {
+		err = desktop.SendCtrlV()
+	}
+	if err == nil {
+		timer := time.NewTimer(200 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+		}
+	}
+	cancel()
+	restoreClipboard(old)
 }
 
 // copySelection sends Ctrl+C and reads back whatever ended up on the
 // clipboard, restoring the previous clipboard contents afterwards.
 func copySelection() string {
-	old := desktop.GetClipboard()
-	_ = desktop.ClearClipboard()
-	_ = desktop.SendCtrlC()
-
-	var value string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
-		if v := desktop.GetClipboard(); v != "" {
-			value = v
-			break
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+	old, err := desktop.SnapshotClipboard(ctx)
+	cancel()
+	if err != nil {
+		return ""
 	}
 
-	_ = desktop.SetClipboard(old)
+	ctx, cancel = context.WithTimeout(context.Background(), clipboardTimeout)
+	if err := desktop.ClearClipboard(ctx); err != nil {
+		cancel()
+		return ""
+	}
+	updates := desktop.WatchClipboardText(ctx)
+	if err := desktop.SendCtrlC(); err != nil {
+		cancel()
+		restoreClipboard(old)
+		return ""
+	}
+
+	var value string
+	select {
+	case copied, ok := <-updates:
+		if ok {
+			value = string(copied)
+		}
+	case <-ctx.Done():
+	}
+	cancel()
+	restoreClipboard(old)
 	return value
+}
+
+func restoreClipboard(snapshot desktop.ClipboardSnapshot) {
+	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
+	defer cancel()
+	_ = snapshot.Restore(ctx)
 }
 
 func firstLine(s string) string {

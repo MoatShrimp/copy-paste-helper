@@ -1,7 +1,8 @@
-// Package tray is the right-click system tray icon: an Edit Templates
-// launcher, a Template submenu, a Mode submenu, a Suspended toggle, and
-// Quit, backed by the StatusNotifierItem D-Bus protocol
-// (github.com/gogpu/systray) rather than GTK, so it needs no cgo.
+//go:build !darwin
+
+// Package tray is the right-click system tray icon: a Template submenu, a
+// Mode submenu, a Suspended toggle, and Quit, backed by native Linux D-Bus or
+// Win32 support from github.com/gogpu/systray.
 package tray
 
 import (
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gogpu/systray"
 
+	"copy-paste-helper/internal/desktop"
 	"copy-paste-helper/internal/engine"
 )
 
@@ -83,14 +85,28 @@ func (tr *Tray) buildMenu(state *engine.State, suspended *atomic.Bool, commands 
 	menu.AddSeparator()
 	menu.Add("Quit", func() { quit() })
 
-	return menu
+	tr.st = systray.New().
+		SetAppName("copy-paste-helper").
+		SetIcon(iconActivePNG).
+		SetTooltip("copy-paste-helper — " + state.Current().Name).
+		SetMenu(menu).
+		Show()
+	desktop.SetNotifier(func(title, body string) {
+		tr.st.ShowNotification(title, body)
+	})
+
+	return tr
 }
 
 // Run pumps the tray's event loop; it blocks until Remove is called.
 func (tr *Tray) Run() error { return tr.st.Run() }
 
-// Remove destroys the tray icon and unblocks Run.
-func (tr *Tray) Remove() { tr.st.Remove() }
+// Remove destroys the tray icon, disables its notification backend, and
+// unblocks Run.
+func (tr *Tray) Remove() {
+	desktop.SetNotifier(nil)
+	tr.st.Remove()
+}
 
 // Sync refreshes every checkbox and the icon/tooltip to match current
 // state. Called after any command or hotkey that might have changed

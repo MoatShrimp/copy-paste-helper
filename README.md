@@ -1,37 +1,36 @@
 # copy-paste-helper
 
-A minimal Linux/Wayland rewrite of the old AutoHotkey `CPH.ahk` tool: turns
-F1-F12 and the numpad into copy/paste buttons, each either pasting fixed
-template text or acting as a scratch clipboard buffer, configured entirely
-through YAML templates instead of the old custom `.txt` format and hard-coded
-key bindings.
+A Go rewrite of the old AutoHotkey `CPH.ahk` tool for Linux/Wayland and
+Windows: turns F1-F12 and the numpad into copy/paste buttons, each either
+pasting fixed template text or acting as a scratch clipboard buffer,
+configured entirely through YAML templates.
 
 ## How it works
 
-Global hotkeys don't exist as a portable API on Wayland, so this program
-reads the keyboard directly from `/dev/input/eventX` (evdev), grabs it
-exclusively, and re-emits every key that isn't one of its hotkeys through a
-virtual `/dev/uinput` device — so the keyboard keeps working normally for
-everything else.
+On Wayland, the program reads the keyboard directly from `/dev/input/eventX`
+(evdev), grabs it exclusively, and re-emits non-hotkey input through a virtual
+`/dev/uinput` device. On Windows it uses a low-level keyboard hook, which can
+likewise capture and suppress bare function and numpad keys. Numpad bindings
+refer to the physical keys regardless of Num Lock on both platforms.
 
-Copy/paste is done by shelling out to `wl-copy`/`wl-paste` (clipboard) and
-`ydotool` (simulated `Ctrl+C`/`Ctrl+V`, which is layout-independent since
-letter keys sit in the same physical position on virtually every layout).
-Plain typing ("write" mode) uses `wtype` instead of `ydotool type`: ydotool
-assumes a US keyboard layout when converting characters to keystrokes, so
-under any other active layout (e.g. Swedish) punctuation and symbols come
-out wrong; wtype builds a keymap for the exact characters being typed, so
-it's correct regardless of layout. wtype needs your compositor to support
-the Wayland virtual-keyboard protocol — KWin, Sway, and other wlroots
-compositors do; GNOME/Mutter historically doesn't.
+Clipboard access uses [`golang.design/x/clipboard`](https://pkg.go.dev/golang.design/x/clipboard).
+On Linux, the same virtual keyboard used for passthrough emits
+`Ctrl+C`/`Ctrl+V`; Windows uses native `SendInput`. No separate key-injection
+daemon is needed on either platform.
+On Wayland, the clipboard library uses the compositor's data-control protocol
+when available and otherwise falls back to X11 through XWayland; Windows uses
+its native clipboard API. Plain typing ("write" mode) uses Unicode `SendInput`
+on Windows. Linux uses `wtype`, whose generated keymap preserves arbitrary text
+regardless of the active layout. wtype needs the Wayland virtual-keyboard
+protocol — KWin, Sway, and other wlroots compositors support it;
+GNOME/Mutter historically doesn't.
 
-## One-time system setup
+## Linux setup
 
 ```sh
-sudo pacman -S --needed wl-clipboard ydotool wtype nodejs npm webkit2gtk-4.1 gtk3
+sudo pacman -S --needed wtype nodejs npm webkit2gtk-4.1 gtk3
 go install github.com/wailsapp/wails/v2/cmd/wails@latest   # needs ~/.local/bin (or $(go env GOBIN)) on PATH
 sudo usermod -aG input "$USER"
-systemctl --user enable --now ydotool.service   # or ydotoold, see below
 ```
 
 Node.js/npm, `wails`, and webkit2gtk/gtk3 are only needed to build the
@@ -41,11 +40,8 @@ doesn't link against any of that.
 Then **log out and back in** (or `newgrp input`) for the group change to
 take effect.
 
-`ydotool` needs its daemon running and write access to `/dev/uinput`
-(copy-paste-helper also needs `/dev/uinput` directly, for the passthrough
-keyboard device). On most distros the `ydotool` package ships a systemd user
-unit (`ydotool.service`); if yours doesn't, run `ydotoold &` manually or add
-your own unit. If `/dev/uinput` isn't writable by your user/group even after
+copy-paste-helper needs write access to `/dev/uinput` for its passthrough and
+shortcut-injection keyboard. If it isn't writable by your user/group after
 joining `input`, add a udev rule such as:
 
 ```
@@ -58,6 +54,7 @@ then `sudo udevadm control --reload && sudo udevadm trigger`.
 ## Build & run
 
 ```sh
+# Linux
 go build -o copy-paste-helper ./cmd/copy-paste-helper
 
 cd cmd/copy-paste-helper-editor
@@ -205,17 +202,15 @@ pull`-ing new templates) takes effect immediately, no restart needed:
 | Pause                     | Suspend/resume all hotkeys (keyboard behaves normally while suspended) |
 | Ctrl + Pause              | Quit                                                                   |
 
-Notifications are shown with `notify-send`, using the desktop theme's
-`edit-paste` icon and a small amount of markup (bold key labels, italic for
-empty/placeholder text) for readability. Any user-authored or pasted text
-interpolated into a notification is escaped first, so it can't break the
-formatting.
+Notifications are sent directly through the tray library's native backend
+(D-Bus on Linux and Win32 on Windows). Linux notifications use a small amount
+of markup for readability; Windows notifications are converted to plain text.
+User-authored values are escaped before interpolation.
 
 ## Tray icon
 
-A right-click tray icon (via the StatusNotifierItem D-Bus protocol — no GTK
-dependency, works with KDE, and most other freedesktop-compliant desktops)
-mirrors and controls the same state as the hotkeys:
+A right-click tray icon (StatusNotifierItem D-Bus on Linux, native Win32 on
+Windows) mirrors and controls the same state as the hotkeys:
 
 - **Edit Templates...** — launches the template editor GUI (see above).
 - **Template** — submenu listing every loaded template; click one to switch
@@ -232,7 +227,7 @@ and [clipboard-off](https://tabler.io/icons/icon/clipboard-off) from
 [Tabler Icons](https://tabler.io/icons) (MIT licensed), rendered black with
 a white halo so they stay legible on both light and dark panels.
 
-Changing something from the menu doesn't also pop up a `notify-send`
-notification — the menu's own checkmarks already show the result, so a
-toast for the same change would just be noise. Notifications still fire for
-changes made from the keyboard, since those have no other visual feedback.
+Changing something from the menu doesn't also pop up a notification — the
+menu's own checkmarks already show the result, so a toast for the same change
+would just be noise. Notifications still fire for changes made from the
+keyboard, since those have no other visual feedback.
